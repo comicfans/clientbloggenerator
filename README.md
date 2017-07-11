@@ -21,17 +21,27 @@ Why javascript instead of jekyll
 
 
 How blog index (which is the most important) constructed:
-    every blog is identified by md5 of its path (relative to _posts directory) and name (md5 should be enough for your post names)
+    every blog is identified by hash (configurable) of its path (relative to _posts directory) and name (md5 should be enough for your post names)
     every blog has multi attributes, which can be single value or multi value.
     To improve client response for massive amount blogs, long lists is splited into multi json
 
     folder structure:
+
+    simple type
+    webroot
+      |_ json_index(folder)
+          |_ v0 (folder)
+                |_____  root_index.json
+ 
+    complex type
     webroot
       |_ json_index(folder)
           |_ v0 (folder)
                 |_____  root_index.json
                 |_____  post_map_0.json
                 |_____  post_map_1.json
+                |_____  attributes_0.json
+                |_____  attributes_1.json
                 |_____  attributes_index(folder) 
                            |_____ att0_0.json
                            |_____ att0_1.json
@@ -41,13 +51,48 @@ How blog index (which is the most important) constructed:
     root index:
       root_index.json under webroot/index/v0 folder
       content:
+        .type : string only simple or complex allowed
         .hash : string ,hash function used to map post path into short hash 
-              if "none" used, post_map is ignored completly, every entry saved is just the post path
               for massive amount blogs (with verylong path), short hash can reduce index file size,
               also we can sort index based on number to load exactly map only
 
+
+
+      for type:"simple" content
+        .attributes=[
+                {name:"author",is_multi:false},
+                {name:"title",is_multi:false},
+                {name:"tag",is_multi:true},
+                {name:"date",is_multi:false}],
+        .post_map: object
+            {
+                "23da1ab0":"filepath1",
+                "0ac29b2d":"filepath2"
+            }
+        .attributes_index: object
+            {
+              "title":
+              {
+                  "title1":["post1path","maybepost2path"]
+              },
+              "date":
+              {
+                  "2017-12-12 hh:mm:ss":["post1path","post2path"],
+                  "2017-12-12 hh:mm:ss":["post2path","post2path"]
+              },
+              "tag"
+              {
+                "tagA":["post1path","post2path"]
+              }
+
+            }
+
+      for type "complex" content
+
         .post_map_number int  number of total post_map pages (for example 100 record per json, 178 record totally, number)
-        .attributes : []  array of unique attributes info of posts. info contains: 
+        .attribute_number : int number of total attribute pages 
+        
+        in attribute array of unique attributes info of posts. info contains: 
             .name : attribute name (no support space inside attribute name, but you can choose to display any name from client)
             .page_number : int number of total paged 
             .is_multi :  bool value should this attribute have multi values (for example tags)
@@ -55,13 +100,12 @@ How blog index (which is the most important) constructed:
 
     post map index:
       post_map_n.json: 
-        .key is md5 of post path  
+        .key is hash of post path  
         .value is the post path
         for example
         {
           "a4dadca134123769721abedf92021234":"2015/01/22/my-first-blog.md",
-          {},
-          {}
+          "b4dadca134123769721abedf92021234":"2015/01/22/my-sec-blog.md",
         }
 
 
