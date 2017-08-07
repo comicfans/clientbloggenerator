@@ -103,15 +103,7 @@ func shouldProcess(path string) bool {
 	return false
 }
 
-func NewPostInfo(postPath string, attributes map[string]interface{}) PostInfo {
-
-	ret := PostInfo{}
-
-	return ret
-
-}
-
-func (index *RootIndex) AddPostInfo(postPath string, postInfo PostInfo) {
+func (index *RootIndex) AddPostInfo(postPath string, postInfo *PostInfo) {
 
 	atomic.AddUint64(&index.raw_name_length, uint64(len(postPath)))
 	atomic.AddUint64(&index.post_number, 1)
@@ -157,7 +149,9 @@ func (index *RootIndex) Parse(path string) {
 		log.Debugf("attr %s", attr)
 	}
 
-	postInfo := PostInfo{}
+	postInfo := &PostInfo{
+		attributes: f,
+	}
 
 	index.AddPostInfo(path, postInfo)
 }
@@ -186,8 +180,13 @@ func (index *RootIndex) Visit(path string, f os.FileInfo, err error) error {
 func CollectPosts() *RootIndex {
 
 	rootIndex := &RootIndex{
-		raw_name_length: 0,
-		post_number:     0,
+		raw_name_length:        0,
+		post_number:            0,
+		hash:                   "none",
+		hash_length:            -1,
+		post_map:               make(map[string]string),
+		attributes_map:         make(map[string]*AttributeInfo),
+		attributes_reverse_map: make(map[string][]string),
 	}
 
 	cwd, err := os.Getwd()
@@ -212,7 +211,7 @@ func TestColliding(hashMap *syncmap.Map, prevTryLength, hashMaxLength int) (int,
 
 		colliding := false
 		hashMap.Range(func(key, value interface{}) bool {
-			stringKey := hex.EncodeToString(key.([]byte))
+			stringKey := hex.EncodeToString([]byte(key.(string)))
 
 			if _, has := testMap[stringKey]; has {
 				colliding = true
@@ -262,9 +261,9 @@ func (rootIndex *RootIndex) FindShortestHash() {
 
 				h := HASH_FUNC[i]()
 
-				sum := h.Sum(key.([]byte))
+				sum := h.Sum([]byte(key.(string)))
 
-				_, loaded := tryMap.LoadOrStore(sum, key)
+				_, loaded := tryMap.LoadOrStore(string(sum), key)
 
 				if loaded {
 					colliding = true
@@ -312,10 +311,10 @@ func (rootIndex *RootIndex) GenerateReverseMap() {
 	rootIndex.ma.Range(func(key, value interface{}) bool {
 
 		postPath := key.(string)
-		attributesMap := value.(map[string]interface{})
+		postInfo := value.(*PostInfo)
 		postHash := rootIndex.post_map[postPath]
 
-		for key, value := range attributesMap {
+		for key, value := range postInfo.attributes {
 
 			attrInfo, ok := rootIndex.attributes_map[key]
 			if !ok {
