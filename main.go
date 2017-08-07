@@ -183,7 +183,7 @@ func CollectPosts() *RootIndex {
 		raw_name_length:        0,
 		post_number:            0,
 		hash:                   "none",
-		hash_length:            -1,
+		hash_length:            0,
 		post_map:               make(map[string]string),
 		attributes_map:         make(map[string]*AttributeInfo),
 		attributes_reverse_map: make(map[string][]string),
@@ -229,7 +229,7 @@ func TestColliding(hashMap *syncmap.Map, prevTryLength, hashMaxLength int) (int,
 
 	}
 
-	return -1, nil
+	return 0, nil
 }
 
 func (rootIndex *RootIndex) FindShortestHash() {
@@ -281,7 +281,12 @@ func (rootIndex *RootIndex) FindShortestHash() {
 		}
 
 		rootIndex.hash = HASH_NAME[i]
-		rootIndex.hash_length, rootIndex.post_map = TestColliding(&tryMap, prevTryLength, HASH_HEX_LENGTH[i])
+		hashMaxLength := HASH_HEX_LENGTH[i]
+		rootIndex.hash_length, rootIndex.post_map = TestColliding(&tryMap, prevTryLength, hashMaxLength)
+		if rootIndex.hash_length == hashMaxLength {
+			// same as max length , can be omitted
+			rootIndex.hash_length = 0
+		}
 		//this is shortest hash
 		log.Infof("choose %s as hash ,hash length %d", HASH_NAME[i], rootIndex.hash_length)
 		return
@@ -293,6 +298,39 @@ func (rootIndex *RootIndex) FindShortestHash() {
 }
 
 func (rootIndex *RootIndex) GenerateIndex(typeIsSimple bool) {
+
+	jsonObject := make(map[string]interface{})
+
+	jsonObject["type"] = "simple"
+
+	usePostMap := false
+	if rootIndex.hash != "none" {
+		usePostMap = true
+		jsonObject["use_post_map"] = usePostMap
+		jsonObject["hash"] = rootIndex.hash
+	}
+	if rootIndex.hash_length != 0 {
+		jsonObject["hash_length"] = rootIndex.hash_length
+	}
+
+	if usePostMap {
+		jsonObject["post_map"] = rootIndex.post_map
+	}
+
+	attributes := make(map[string]map[string]interface{})
+
+	attributes_index := make(map[string]map[string][]string)
+
+	for key, value := range rootIndex.attributes_map {
+		attrObj := make(map[string]interface{})
+		attrObj["is_multi"] = value.is_multi
+		attributes[key] = attrObj
+
+		for _, v := range value.values {
+		}
+	}
+
+	jsonObject["attrbiutes"] = attributes
 
 }
 

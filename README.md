@@ -43,7 +43,7 @@ folder structure:
 root index: root_index.json under webroot/index/v0 folder, content:
 * type (required) : string, only "simple" or "complex" allowed, describe type of index  (complex type will be described next )
 * hash (required) : string ,hash function used to map post path into short hash.for massive amount blogs (with verylong path), short hash can reduce index file size,also we can sort index based on number to load exactly index file only.currently supported list: "java32","md5","sha1","sha256","none". java32 is the string.hashCode of java language, simple and create 32bit integer. "none" means no hash used ,any identifier appears later is the actual file path. generator will default try to use weakest(short) hash to create identify, and auto use stronger hash if collide found (finally use actual path instead of hash if all hash has colliding)
-* hash_length (optional) : length of hash, only required when hash is not "none". generator will find fewest none-collide chars of hash result(to reduce size of record maximum), note this is count by hex string char number, not count by hash byte.(one byte shows as two chars)
+* hash_length (optional) : length of hash, only required when hash is not "none". generator will find fewest none-collide chars of hash result(to reduce size of record maximum), note this is count by hex string char number, not count by hash byte.(one byte shows as two chars) . if hash_is not trimmed (eg, 8 for crc32, 32 for md5), hash_length can be omitted
 
 * post_map (optional): required when hash is not "none", object, key is hash of path, value is post path 
 ```json
