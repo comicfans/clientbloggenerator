@@ -6,8 +6,9 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"github.com/gernest/front"
-	log "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/syncmap"
 	"hash"
 	"hash/crc32"
@@ -18,6 +19,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+)
+
+var (
+	log = logrus.New()
 )
 
 type AttributeInfo struct {
@@ -39,8 +44,8 @@ type RootIndex struct {
 }
 
 type PostInfo struct {
-	hash_hex   []byte
-	attributes map[string]interface{}
+	hash_string string
+	attributes  map[string]interface{}
 }
 
 const (
@@ -180,13 +185,12 @@ func (index *RootIndex) Visit(path string, f os.FileInfo, err error) error {
 func CollectPosts() *RootIndex {
 
 	rootIndex := &RootIndex{
-		raw_name_length:        0,
-		post_number:            0,
-		hash:                   "none",
-		hash_length:            0,
-		post_map:               make(map[string]string),
-		attributes_map:         make(map[string]*AttributeInfo),
-		attributes_reverse_map: make(map[string]map[string][]string),
+		raw_name_length: 0,
+		post_number:     0,
+		hash:            "none",
+		hash_length:     0,
+		post_map:        make(map[string]string),
+		attributes_map:  make(map[string]*AttributeInfo),
 	}
 
 	cwd, err := os.Getwd()
@@ -211,7 +215,9 @@ func TestColliding(hashMap *syncmap.Map, prevTryLength, hashMaxLength int) (int,
 
 		colliding := false
 		hashMap.Range(func(key, value interface{}) bool {
-			stringKey := hex.EncodeToString([]byte(key.(string)))
+			stringKey := hex.EncodeToString([]byte(key.(string)))[:l]
+
+			log.Debugf("key %v", stringKey)
 
 			if _, has := testMap[stringKey]; has {
 				colliding = true
@@ -224,12 +230,16 @@ func TestColliding(hashMap *syncmap.Map, prevTryLength, hashMaxLength int) (int,
 		})
 
 		if !colliding {
+
+			log.Infof("length %v is enough", l)
 			return l, testMap
 		}
 
+		log.Debugf("length %v collding", l)
+
 	}
 
-	return 0, nil
+	return hashMaxLength, nil
 }
 
 func (rootIndex *RootIndex) FindShortestHash() {
@@ -252,7 +262,7 @@ func (rootIndex *RootIndex) FindShortestHash() {
 		var wg sync.WaitGroup
 
 		colliding := false
-		rootIndex.post_infos.Range(func(key, value interface{}) bool {
+		rootIndex.post_infos.Range(func(postPath, postInfo interface{}) bool {
 
 			wg.Add(1)
 			go func() {
@@ -261,9 +271,13 @@ func (rootIndex *RootIndex) FindShortestHash() {
 
 				h := HASH_FUNC[i]()
 
-				sum := h.Sum([]byte(key.(string)))
+				h.Write([]byte(postPath.(string)))
+				sum := h.Sum(nil)
 
-				_, loaded := tryMap.LoadOrStore(string(sum), key)
+				postInfo.(*PostInfo).hash_string = hex.EncodeToString(sum)
+				log.Debugf("%v hash is %v", postPath, postInfo.(*PostInfo).hash_string)
+
+				_, loaded := tryMap.LoadOrStore(string(sum), postPath)
 
 				if loaded {
 					colliding = true
@@ -276,19 +290,22 @@ func (rootIndex *RootIndex) FindShortestHash() {
 		wg.Wait()
 
 		if colliding {
-			log.Info(HASH_NAME[i], " has collising, skip")
+			log.Debug(HASH_NAME[i], " has collising, skip")
 			continue
 		}
+
+		log.Debug(HASH_NAME[i], " is enough, try shortest length")
 
 		rootIndex.hash = HASH_NAME[i]
 		hashMaxLength := HASH_HEX_LENGTH[i]
 		rootIndex.hash_length, rootIndex.post_map = TestColliding(&tryMap, prevTryLength, hashMaxLength)
+
+		//this is shortest hash
+		log.Infof("choose %s as hash ,hash length %d", HASH_NAME[i], rootIndex.hash_length)
 		if rootIndex.hash_length == hashMaxLength {
 			// same as max length , can be omitted
 			rootIndex.hash_length = 0
 		}
-		//this is shortest hash
-		log.Infof("choose %s as hash ,hash length %d", HASH_NAME[i], rootIndex.hash_length)
 		return
 	}
 
@@ -323,8 +340,12 @@ func (rootIndex *RootIndex) GenerateIndexJson(typeIsSimple bool) {
 
 	for attrName, attrInfo := range rootIndex.attributes_map {
 		attrObj := make(map[string]interface{})
-		attrObj["is_multi"] = attrInfo.is_multi
-		attrObj["is_numeric"] = attrInfo.is_numeric
+		if attrInfo.is_multi {
+			attrObj["is_multi"] = true
+		}
+		if attrInfo.is_numeric {
+			attrObj["is_numeric"] = true
+		}
 		if attrInfo.is_numeric {
 			attrObj["numeric_sum"] = attrInfo.numeric_sum
 		}
@@ -336,15 +357,43 @@ func (rootIndex *RootIndex) GenerateIndexJson(typeIsSimple bool) {
 	jsonObject["attrbiutes"] = attributes
 	jsonObject["attrbiutes_index"] = attributes_index
 
+	indexDir := filepath.Join("json_index", "v0")
+
+	err := os.MkdirAll(indexDir, os.ModePerm)
+	if err != nil {
+		log.Fatalf("can not create index dir %s", indexDir)
+		return
+	}
+
+	indexFile := filepath.Join(indexDir, "root_index.json")
+	writer, err := os.Create(indexFile)
+	if err != nil {
+
+		log.Fatalf("can not create json file %v,%v", indexFile, err)
+		return
+	}
+
+	encoder := json.NewEncoder(writer)
+	encoder.SetIndent("", " ")
+
+	err = encoder.Encode(jsonObject)
+	if err != nil {
+		log.Fatalf("error writing json file %v, %v", indexFile, err)
+		return
+	}
+
+	log.Infof("create index file %v", indexFile)
+
 }
 
-func AddAttrPost(m *map[string]*AttributeInfo, attrName string, attrValues []string, postIdentity string) {
+func AddAttrPost(m *map[string]*AttributeInfo, attrName string, attrValues []string, postIdentity string, hash_length int) {
 
 	attrInfo, ok := (*m)[attrName]
 	if !ok {
-		attrValuePost = &AttributeInfo{
+		attrInfo = &AttributeInfo{
 			is_multi:    false,
 			is_numeric:  true,
+			posts:       make(map[string][]string),
 			numeric_sum: 0,
 		}
 		(*m)[attrName] = attrInfo
@@ -355,20 +404,23 @@ func AddAttrPost(m *map[string]*AttributeInfo, attrName string, attrValues []str
 	}
 
 	for _, attrValue := range attrValues {
-		integer, asNumeric := strconv.Atoi(attrValue)
-		if !asNumeric {
+		integer, err := strconv.Atoi(attrValue)
+		if err != nil {
 			attrInfo.is_numeric = false
 			attrInfo.numeric_sum = -1
 		} else if attrInfo.is_numeric {
-			attrInfo.numeric_sum = attrInfo.numeric_sum + integer
+			attrInfo.numeric_sum = attrInfo.numeric_sum + int64(integer)
 		}
 
 		list, _ := attrInfo.posts[attrValue]
 
+		if hash_length != 0 {
+			postIdentity = postIdentity[:hash_length]
+
+		}
 		attrInfo.posts[attrValue] = append(list, postIdentity)
 	}
 
-	return v
 }
 
 func (rootIndex *RootIndex) GenerateReverseMap() {
@@ -377,7 +429,10 @@ func (rootIndex *RootIndex) GenerateReverseMap() {
 
 		postPath := key.(string)
 		postInfo := value.(*PostInfo)
-		postIdentity := rootIndex.post_map[postPath]
+		postIdentity := postInfo.hash_string
+		if rootIndex.hash == "none" {
+			postIdentity = postPath
+		}
 
 		for attrName, value := range postInfo.attributes {
 
@@ -385,19 +440,23 @@ func (rootIndex *RootIndex) GenerateReverseMap() {
 
 			if v, ok := value.(string); ok {
 				attrValues = append(attrValues, v)
-			} else if v, ok := value.([]string); ok {
-				attrValues = append(attrValues, v...)
+			} else if v, ok := value.([]interface{}); ok {
+				for _, i := range v {
+					attrValues = append(attrValues, i.(string))
+				}
 			} else {
-				log.Fatal("bad logic ,incorrect type")
+				log.Fatalf("bad logic ,incorrect type %T", value)
 			}
 
-			AddAttrPost(&rootIndex.attributes_map, attrName, attrValues, postIdentity)
+			AddAttrPost(&rootIndex.attributes_map, attrName, attrValues, postIdentity, rootIndex.hash_length)
 		}
 		return true
 	})
 }
 
 func main() {
+
+	log.SetLevel(logrus.DebugLevel)
 
 	rootIndex := CollectPosts()
 
