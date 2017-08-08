@@ -21,21 +21,21 @@ import (
 )
 
 type AttributeInfo struct {
-	values     []string
-	is_multi   bool
-	is_numeric bool
+	is_multi    bool
+	is_numeric  bool
+	posts       map[string][]string
+	numeric_sum int64
 }
 
 type RootIndex struct {
-	wg                     sync.WaitGroup
-	ma                     syncmap.Map
-	raw_name_length        uint64
-	post_number            uint64
-	hash                   string
-	hash_length            int
-	post_map               map[string]string
-	attributes_map         map[string]*AttributeInfo
-	attributes_reverse_map map[string][]string
+	wg              sync.WaitGroup
+	post_infos      syncmap.Map
+	raw_name_length uint64
+	post_number     uint64
+	hash            string
+	hash_length     int
+	post_map        map[string]string
+	attributes_map  map[string]*AttributeInfo
 }
 
 type PostInfo struct {
@@ -108,7 +108,7 @@ func (index *RootIndex) AddPostInfo(postPath string, postInfo *PostInfo) {
 	atomic.AddUint64(&index.raw_name_length, uint64(len(postPath)))
 	atomic.AddUint64(&index.post_number, 1)
 
-	index.ma.Store(postPath, postInfo)
+	index.post_infos.Store(postPath, postInfo)
 
 }
 
@@ -186,7 +186,7 @@ func CollectPosts() *RootIndex {
 		hash_length:            0,
 		post_map:               make(map[string]string),
 		attributes_map:         make(map[string]*AttributeInfo),
-		attributes_reverse_map: make(map[string][]string),
+		attributes_reverse_map: make(map[string]map[string][]string),
 	}
 
 	cwd, err := os.Getwd()
@@ -252,7 +252,7 @@ func (rootIndex *RootIndex) FindShortestHash() {
 		var wg sync.WaitGroup
 
 		colliding := false
-		rootIndex.ma.Range(func(key, value interface{}) bool {
+		rootIndex.post_infos.Range(func(key, value interface{}) bool {
 
 			wg.Add(1)
 			go func() {
@@ -297,7 +297,7 @@ func (rootIndex *RootIndex) FindShortestHash() {
 
 }
 
-func (rootIndex *RootIndex) GenerateIndex(typeIsSimple bool) {
+func (rootIndex *RootIndex) GenerateIndexJson(typeIsSimple bool) {
 
 	jsonObject := make(map[string]interface{})
 
@@ -321,24 +321,51 @@ func (rootIndex *RootIndex) GenerateIndex(typeIsSimple bool) {
 
 	attributes_index := make(map[string]map[string][]string)
 
-	for key, value := range rootIndex.attributes_map {
+	for attrName, attrInfo := range rootIndex.attributes_map {
 		attrObj := make(map[string]interface{})
-		attrObj["is_multi"] = value.is_multi
-		attributes[key] = attrObj
-
-		for _, v := range value.values {
+		attrObj["is_multi"] = attrInfo.is_multi
+		attrObj["is_numeric"] = attrInfo.is_numeric
+		if attrInfo.is_numeric {
+			attrObj["numeric_sum"] = attrInfo.numeric_sum
 		}
+		attributes[attrName] = attrObj
+
+		attributes_index[attrName] = attrInfo.posts
 	}
 
 	jsonObject["attrbiutes"] = attributes
+	jsonObject["attrbiutes_index"] = attributes_index
 
 }
 
-func AssumeKey(m *map[string][]string, k string) []string {
+func AddAttrPost(m *map[string]*AttributeInfo, attrName string, attrValues []string, postIdentity string) {
 
-	v, ok := (*m)[k]
+	attrInfo, ok := (*m)[attrName]
 	if !ok {
-		return nil
+		attrValuePost = &AttributeInfo{
+			is_multi:    false,
+			is_numeric:  true,
+			numeric_sum: 0,
+		}
+		(*m)[attrName] = attrInfo
+	}
+
+	if len(attrValues) > 1 {
+		attrInfo.is_multi = true
+	}
+
+	for _, attrValue := range attrValues {
+		integer, asNumeric := strconv.Atoi(attrValue)
+		if !asNumeric {
+			attrInfo.is_numeric = false
+			attrInfo.numeric_sum = -1
+		} else if attrInfo.is_numeric {
+			attrInfo.numeric_sum = attrInfo.numeric_sum + integer
+		}
+
+		list, _ := attrInfo.posts[attrValue]
+
+		attrInfo.posts[attrValue] = append(list, postIdentity)
 	}
 
 	return v
@@ -346,50 +373,26 @@ func AssumeKey(m *map[string][]string, k string) []string {
 
 func (rootIndex *RootIndex) GenerateReverseMap() {
 
-	rootIndex.ma.Range(func(key, value interface{}) bool {
+	rootIndex.post_infos.Range(func(key, value interface{}) bool {
 
 		postPath := key.(string)
 		postInfo := value.(*PostInfo)
-		postHash := rootIndex.post_map[postPath]
+		postIdentity := rootIndex.post_map[postPath]
 
-		for key, value := range postInfo.attributes {
+		for attrName, value := range postInfo.attributes {
 
-			attrInfo, ok := rootIndex.attributes_map[key]
-			if !ok {
-				attrInfo = &AttributeInfo{
-					values:     nil,
-					is_multi:   false,
-					is_numeric: true,
-				}
-				rootIndex.attributes_map[key] = attrInfo
-			}
-
-			var values []string
+			var attrValues []string
 
 			if v, ok := value.(string); ok {
-				values = append(values, v)
+				attrValues = append(attrValues, v)
 			} else if v, ok := value.([]string); ok {
-				values = append(values, v...)
-				attrInfo.values = append(attrInfo.values, v...)
-
+				attrValues = append(attrValues, v...)
 			} else {
 				log.Fatal("bad logic ,incorrect type")
 			}
 
-			if len(values) > 1 {
-				attrInfo.is_multi = true
-			}
-
-			for _, s := range values {
-				if _, err := strconv.Atoi(s); err != nil {
-					attrInfo.is_numeric = false
-				}
-
-				orig := AssumeKey(&rootIndex.attributes_reverse_map, s)
-				rootIndex.attributes_reverse_map[s] = append(orig, postHash)
-			}
+			AddAttrPost(&rootIndex.attributes_map, attrName, attrValues, postIdentity)
 		}
-
 		return true
 	})
 }
@@ -402,6 +405,6 @@ func main() {
 
 	rootIndex.GenerateReverseMap()
 
-	rootIndex.GenerateIndex(true)
+	rootIndex.GenerateIndexJson(true)
 
 }
