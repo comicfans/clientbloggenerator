@@ -19,16 +19,27 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 var (
 	log = logrus.New()
 )
 
+const (
+	STRING  = "string"
+	NUMERIC = "numeric"
+	DATE    = "date"
+)
+
+var GUESS_TIME_LAYOUT []string = [...]string{"1987-11-28 13:22:48 +0800", "1989-1-3 0:2:23", "2014-4-27 13:20", "2003-9-28 11", "2010-9-3"}
+
 type AttributeInfo struct {
 	is_multi    bool
+	value_type  string
 	is_numeric  bool
-	posts       map[string][]string
+	is_date     bool
+	posts       map[string][]*PostInfo
 	numeric_sum int64
 }
 
@@ -343,9 +354,9 @@ func (rootIndex *RootIndex) GenerateIndexJson(typeIsSimple bool) {
 		if attrInfo.is_multi {
 			attrObj["is_multi"] = true
 		}
-		if attrInfo.is_numeric {
-			attrObj["is_numeric"] = true
-		}
+
+		attrObj["value_type"] = attrInfo.value_type
+
 		if attrInfo.is_numeric {
 			attrObj["numeric_sum"] = attrInfo.numeric_sum
 		}
@@ -386,6 +397,17 @@ func (rootIndex *RootIndex) GenerateIndexJson(typeIsSimple bool) {
 
 }
 
+func GuessValueType(attrInfo *AttributeInfo, attrValue string) {
+
+	integer, err := strconv.Atoi(attrValue)
+	if err != nil {
+		attrInfo.is_numeric = false
+		attrInfo.numeric_sum = -1
+	} else if attrInfo.is_numeric {
+		attrInfo.numeric_sum = attrInfo.numeric_sum + int64(integer)
+	}
+}
+
 func AddAttrPost(m *map[string]*AttributeInfo, attrName string, attrValues []string, postIdentity string, hash_length int) {
 
 	attrInfo, ok := (*m)[attrName]
@@ -393,6 +415,8 @@ func AddAttrPost(m *map[string]*AttributeInfo, attrName string, attrValues []str
 		attrInfo = &AttributeInfo{
 			is_multi:    false,
 			is_numeric:  true,
+			is_date:     true,
+			value_type:  STRING,
 			posts:       make(map[string][]string),
 			numeric_sum: 0,
 		}
@@ -404,13 +428,8 @@ func AddAttrPost(m *map[string]*AttributeInfo, attrName string, attrValues []str
 	}
 
 	for _, attrValue := range attrValues {
-		integer, err := strconv.Atoi(attrValue)
-		if err != nil {
-			attrInfo.is_numeric = false
-			attrInfo.numeric_sum = -1
-		} else if attrInfo.is_numeric {
-			attrInfo.numeric_sum = attrInfo.numeric_sum + int64(integer)
-		}
+
+		GuessValueType(attrInfo, attrValue)
 
 		list, _ := attrInfo.posts[attrValue]
 
