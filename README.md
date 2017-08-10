@@ -63,7 +63,7 @@ root index: root_index.json under webroot/index/v0 folder, content:
  "is_multi":true  
  }
 ```
-   is_multi : if one post can contain multi value of this attribute.(not means if their value is unique, for example , two posts can have same title, but one post has only one title ,so title still set is_multi=true )
+   is_multi : if one post can contain multi value of this attribute.(not means if their value is unique, for example , two posts can have same title, but one post has only one title ,so title still set is_multi=false)
  
 attributes example:
 ```json
@@ -177,7 +177,7 @@ for type "complex" type (lots of blogs), root_index.json contains:
 * hash : same as simple
 * hash_length : same as simple
 * post_map (optional): object contains page and order info. required when hash is not "none"(but can be omitted if all member is default)
-      - pages (optional): integer number of total post_map pages (for example 100 record per json, 178 record totally, will result post_map_pages=2), no such member means pages=1. sub page always have less equal than 256 in one folder, for example pages <=256, they all appears under post_map folder, but pages = 65000 , will create folder structure as follwing : 
+  - pages (optional): integer number of total post_map pages (for example 100 record per json, 178 record totally, will result pages=2), no such member means pages=1. sub page always have less equal than 256 in one folder, for example pages <=256, they all appears under post_map folder, but pages = 65000 , will create folder structure as follwing : 
 <pre>
     post_map   --> root folder to store post_map sub index
        |__ 0   --> spare folder  
@@ -192,12 +192,12 @@ for type "complex" type (lots of blogs), root_index.json contains:
        |   |__511.json
        |__ 2   --> spare folder
 </pre>
-    if pages >= 256*256, it will create 3 levels folder structure (no more than 256 files in one folder , no more than 256 folder under parent folder)
-      - sorted (optional): how record in post_map ordered ,  can be "alpha" only (order by string),  if no such member, means unordered 
-      - order (optional): if 'sorted' provided , order describe "desc" or "asc" , if no such member, default to "asc"
-      - range (optional): required when 'sorted' provided . it's a array of 'pages'+1 elements, first element is the first record of page0 file, following 'pages' elements is the last key of every paged file records. this field is provided for fast lookup into sub-json. 
+if pages >= 256*256, it will create 3 levels folder structure (less equal than 256 files in one folder , less equal than 256 folder under parent folder)
+  - sorted (optional): how record in post_map ordered ,  can be "alpha" only (order by string),  if no such member, means unordered 
+  - order (optional): if 'sorted' provided , order describe "desc" or "asc" , if no such member, default to "asc"
+  - range (optional): required when 'sorted' provided . it's a array of 'pages'+1 elements, first element is the first record of page0 file, following 'pages' elements is the last key of every paged file records. this field is provided for fast lookup into sub-json. 
        for example you have 3 pages ordered post_map which have range 
-       ["000","100","200","300"] which means your 3 pages range is 000~100, 101~200, 201~300
+       ["000","100","200","300"] which means your 3 pages range is 000 ~ 100, 101 ~ 200, 201 ~ 300
        and want to load post of hash="132" , you can binary search in range array to find which page this post_map exactly in , and load that json directly, without iterate all sub pages
   example:
 ```json
@@ -207,13 +207,13 @@ for type "complex" type (lots of blogs), root_index.json contains:
     "pages":2,
     "sorted":"alpha",
     "order":"asc",
-    "range":["893","f2a"]
+    "range":["893","f2a","fff"]
   }
 }
 ```
-    note: when every member of post_map is default, you can completely omit post_map member 
+note: when every member of post_map is default, you can completely omit post_map member 
 
-post_map/n.json : splited post_map json file, example:
+post_map/n/…/n.json : splited post_map json file, example:
 ```json
 {
   "08273cd":"_posts/2015/02/11/my-first-blog.md",
@@ -236,7 +236,7 @@ example:
 }
 ```
    object member of attributes almost same as post_map 
-* attributes object in simple type moved to splited attributes/0.json ~ attributes/n.json paged json files, with following additional fields:
+* attributes object in simple type moved to splited attributes/…/0.json ~ attributes/…/n.json paged json files(also spared with 256 limit), with following additional fields:
   - total (required): how many attributes we have
   - pages (optional) : pages number of this attribute sub index , default to 1 if omitted
   - safe_name (optional): required when attribute name have when attribute name have special chars (space,slash,backslash,star or any others not safe to be part of path). for complex type, every attribute index moved to its named file, better not to have attribute name with special chars, so this member will be the safe replace of original name (with special chars replaced by under score '_', generator should be response to avoid two safe_name clash each other). if omitted, safe_name should be same as original name
@@ -248,7 +248,8 @@ example:
 ```
 because paged json is split by record number (which can be always balance), not by "key" (which can be imbalance)
 
-example: attributes/0.json
+example: 
+attributes/0.json
 ```json
 {
     "tag":{
@@ -339,4 +340,24 @@ for is_multi=true attributes , such as tags, it will create 2 levels folder inde
 </pre>
 note : when pages > 256, they follow same rules as 1 level attributes (spare by folder)
 
-
+note : if is_multi=true attribute have more than 256 values, it also been paged into spared folder ,split by alpha, for example
+<pre>
+      attributes_index
+          |___ tags  (folder)
+                |___ 0  
+                |    |___c++
+                |    |     |__0.json
+                |    |     |__1.json
+                |    |___ c
+                |    |    |__0.json
+                |    |    |__1.json
+                |    |___ C#
+                |         |__0.json
+                |         |__1.json
+                |
+                |
+                |___ 1  
+                     |____php
+                           |__0.json
+                           |__1.json
+</pre>

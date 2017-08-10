@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -15,6 +16,7 @@ import (
 	"hash/crc64"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,14 +34,13 @@ const (
 	DATE    = "date"
 )
 
-var GUESS_TIME_LAYOUT []string = [...]string{"1987-11-28 13:22:48 +0800", "1989-1-3 0:2:23", "2014-4-27 13:20", "2003-9-28 11", "2010-9-3"}
+var GUESS_TIME_LAYOUT []string = []string{"1987-11-28 13:22:48 +0800", "1989-1-3 0:2:23", "2014-4-27 13:20", "2003-9-28 11", "2010-9-3"}
 
 type AttributeInfo struct {
 	is_multi    bool
-	value_type  string
 	is_numeric  bool
 	is_date     bool
-	posts       map[string][]*PostInfo
+	value_posts map[string][]*PostInfo
 	numeric_sum int64
 }
 
@@ -325,6 +326,112 @@ func (rootIndex *RootIndex) FindShortestHash() {
 
 }
 
+type DateStrings []string
+
+func (data DateStrings) Len() int {
+	return len(data)
+}
+
+func (data DateStrings) Swap(i, j int) {
+	data[i], data[j] = data[j], data[i]
+}
+
+func (data DateStrings) Less(i, j int) bool {
+
+	dI, _ := guessDateValue(data[i])
+	dJ, _ := guessDateValue(data[j])
+
+	return (*dI).Before(*dJ)
+
+}
+
+type NumericStrings []string
+
+func (data NumericStrings) Less(i, j int) bool {
+	nI, _ := strconv.Atoi(data[i])
+	nJ, _ := strconv.Atoi(data[j])
+	return nI < nJ
+}
+
+func (data NumericStrings) Len() int {
+	return len(data)
+}
+
+func (data NumericStrings) Swap(i, j int) {
+	data[i], data[j] = data[j], data[i]
+}
+
+type Attributes RootIndex
+
+func (attributes *Attributes) MarshalText() (text []byte, err error) {
+
+	var orderedList []string
+	for key, _ := range attributes.attributes_map {
+		orderedList = append(orderedList, key)
+	}
+
+	sort.Strings(orderedList)
+
+	var buf bytes.Buffer
+	{
+		buf.WriteByte('{')
+		defer buf.WriteByte('}')
+
+		for i, key := range orderedList {
+			if i != len(orderedList)-1 {
+				buf.WriteByte(',')
+			}
+
+			str, _ := json.Marshal(key)
+			buf.Write(str)
+			buf.WriteString(":{")
+			defer buf.WriteByte('}')
+
+			attrInfo := attributes.attributes_map[key]
+
+			var sortedAttrs []string
+			for key, _ := range attrInfo.value_posts {
+				sortedAttrs = append(sortedAttrs, key)
+			}
+
+			var valueType string
+			if attrInfo.is_date {
+				sort.Sort(DateStrings(sortedAttrs))
+				valueType = DATE
+			} else if attrInfo.is_numeric {
+				sort.Sort(NumericStrings(sortedAttrs))
+				valueType = NUMERIC
+			} else {
+				sort.Strings(sortedAttrs)
+				valueType = STRING
+			}
+
+			buf.WriteString(`"value_type":`)
+			buf.WriteString(valueType)
+			buf.WriteByte(",")
+
+			if attrInfo.is_numeric {
+				jsonStr, _ := json.Marshal("numeric_sum")
+				buf.Write(jsonStr)
+				buf.WriteByte(':')
+				jsonStr, _ = json.Marshal(attrInfo.numeric_sum)
+
+				buf.Write([]byte(jsonStr))
+			}
+
+		}
+	}
+
+	return buf.Bytes(), nil
+}
+
+type AttributesIndex RootIndex
+
+func (attributesIndex *AttributesIndex) MarshalText() (text []byte, err error) {
+
+	return nil, nil
+}
+
 func (rootIndex *RootIndex) GenerateIndexJson(typeIsSimple bool) {
 
 	jsonObject := make(map[string]interface{})
@@ -345,28 +452,8 @@ func (rootIndex *RootIndex) GenerateIndexJson(typeIsSimple bool) {
 		jsonObject["post_map"] = rootIndex.post_map
 	}
 
-	attributes := make(map[string]map[string]interface{})
-
-	attributes_index := make(map[string]map[string][]string)
-
-	for attrName, attrInfo := range rootIndex.attributes_map {
-		attrObj := make(map[string]interface{})
-		if attrInfo.is_multi {
-			attrObj["is_multi"] = true
-		}
-
-		attrObj["value_type"] = attrInfo.value_type
-
-		if attrInfo.is_numeric {
-			attrObj["numeric_sum"] = attrInfo.numeric_sum
-		}
-		attributes[attrName] = attrObj
-
-		attributes_index[attrName] = attrInfo.posts
-	}
-
-	jsonObject["attrbiutes"] = attributes
-	jsonObject["attrbiutes_index"] = attributes_index
+	jsonObject["attrbiutes"] = (*Attributes)(rootIndex)
+	jsonObject["attrbiutes_index"] = (*AttributesIndex)(rootIndex)
 
 	indexDir := filepath.Join("json_index", "v0")
 
@@ -397,6 +484,17 @@ func (rootIndex *RootIndex) GenerateIndexJson(typeIsSimple bool) {
 
 }
 
+func guessDateValue(str string) (t *time.Time, ok bool) {
+
+	for _, guess := range GUESS_TIME_LAYOUT {
+		t, err := time.Parse(guess, str)
+		if err == nil {
+			return &t, true
+		}
+	}
+	return nil, false
+}
+
 func GuessValueType(attrInfo *AttributeInfo, attrValue string) {
 
 	integer, err := strconv.Atoi(attrValue)
@@ -406,9 +504,13 @@ func GuessValueType(attrInfo *AttributeInfo, attrValue string) {
 	} else if attrInfo.is_numeric {
 		attrInfo.numeric_sum = attrInfo.numeric_sum + int64(integer)
 	}
+
+	if _, noLayoutMatch := guessDateValue(attrValue); noLayoutMatch {
+		attrInfo.is_date = false
+	}
 }
 
-func AddAttrPost(m *map[string]*AttributeInfo, attrName string, attrValues []string, postIdentity string, hash_length int) {
+func AddAttrPost(m *map[string]*AttributeInfo, attrName string, attrValues []string, postInfo *PostInfo, hash_length int) {
 
 	attrInfo, ok := (*m)[attrName]
 	if !ok {
@@ -416,8 +518,7 @@ func AddAttrPost(m *map[string]*AttributeInfo, attrName string, attrValues []str
 			is_multi:    false,
 			is_numeric:  true,
 			is_date:     true,
-			value_type:  STRING,
-			posts:       make(map[string][]string),
+			value_posts: make(map[string][]*PostInfo),
 			numeric_sum: 0,
 		}
 		(*m)[attrName] = attrInfo
@@ -431,13 +532,9 @@ func AddAttrPost(m *map[string]*AttributeInfo, attrName string, attrValues []str
 
 		GuessValueType(attrInfo, attrValue)
 
-		list, _ := attrInfo.posts[attrValue]
+		list, _ := attrInfo.value_posts[attrValue]
 
-		if hash_length != 0 {
-			postIdentity = postIdentity[:hash_length]
-
-		}
-		attrInfo.posts[attrValue] = append(list, postIdentity)
+		attrInfo.value_posts[attrValue] = append(list, postInfo)
 	}
 
 }
@@ -446,12 +543,7 @@ func (rootIndex *RootIndex) GenerateReverseMap() {
 
 	rootIndex.post_infos.Range(func(key, value interface{}) bool {
 
-		postPath := key.(string)
 		postInfo := value.(*PostInfo)
-		postIdentity := postInfo.hash_string
-		if rootIndex.hash == "none" {
-			postIdentity = postPath
-		}
 
 		for attrName, value := range postInfo.attributes {
 
@@ -467,7 +559,7 @@ func (rootIndex *RootIndex) GenerateReverseMap() {
 				log.Fatalf("bad logic ,incorrect type %T", value)
 			}
 
-			AddAttrPost(&rootIndex.attributes_map, attrName, attrValues, postIdentity, rootIndex.hash_length)
+			AddAttrPost(&rootIndex.attributes_map, attrName, attrValues, postInfo, rootIndex.hash_length)
 		}
 		return true
 	})
